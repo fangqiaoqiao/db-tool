@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SQL执行脚本 - DB Tools</title>
+    <link rel="stylesheet" th:href="@{/css/style.css}">
+</head>
+<body>
+<header class="header">
+    <div class="container header-inner">
+        <a class="logo" th:href="@{/}">DB Tools</a>
+        <div class="db-picker">
+            <label for="database">数据库</label>
+            <select id="database">
+                <option th:each="db : ${databases}" th:value="${db.id}" th:text="${db.label}"></option>
+            </select>
+        </div>
+    </div>
+</header>
+
+<main class="container main">
+    <section class="card">
+        <h1>SQL执行脚本</h1>
+        <p class="hint">可一次执行多条 SQL，语句之间用分号分隔。存储过程、函数整段执行，过程体内的分号不会被拆开；若过程后面还有其它语句，请在过程结束后单独一行写 <code>/</code>。有结果集时展示表格，否则显示影响行数。</p>
+
+        <div class="form-group">
+            <label for="sql">SQL执行脚本</label>
+            <textarea id="sql" rows="14" placeholder="可执行多条 SQL 或存储过程，例如：&#10;SELECT * FROM users LIMIT 10;&#10;CALL some_procedure();&#10;CREATE OR REPLACE PROCEDURE ...&#10;BEGIN&#10;    NULL;&#10;END;&#10;/"></textarea>
+        </div>
+
+        <div class="actions">
+            <button type="button" class="btn btn-primary" id="execute-btn">执行</button>
+            <button type="button" class="btn btn-secondary" id="clear-btn">清空</button>
+        </div>
+
+        <div id="message" class="alert hidden"></div>
+        <div id="result-section" class="result-section hidden"></div>
+    </section>
+</main>
+
+<div id="export-modal" class="modal-overlay hidden">
+    <div class="modal">
+        <h3>导出 INSERT SQL</h3>
+        <p class="hint">将当前结果集导出为 INSERT 语句，便于在本地库执行。</p>
+        <div class="modal-form">
+            <label for="export-table">目标表名</label>
+            <input type="text" id="export-table" placeholder="例如: u_user 或 public.u_user">
+        </div>
+        <div class="modal-actions">
+            <button type="button" class="btn btn-secondary" id="export-cancel">取消</button>
+            <button type="button" class="btn btn-primary" id="export-confirm">下载 .sql 文件</button>
+        </div>
+    </div>
+</div>
+
+<script>
+const sqlInput = document.getElementById('sql');
+const databaseSelect = document.getElementById('database');
+const messageEl = document.getElementById('message');
+const resultSection = document.getElementById('result-section');
+const exportModal = document.getElementById('export-modal');
+const exportTableInput = document.getElementById('export-table');
+
+let exportTarget = null;
+
+document.getElementById('clear-btn').addEventListener('click', () => {
+    sqlInput.value = '';
+    messageEl.classList.add('hidden');
+    resultSection.classList.add('hidden');
+    resultSection.innerHTML = '';
+    exportTarget = null;
+});
+
+document.getElementById('execute-btn').addEventListener('click', async () => {
+    const sql = sqlInput.value.trim();
+    const database = databaseSelect.value;
+    if (!database) {
+        showMessage('请选择数据库', false);
+        return;
+    }
+    if (!sql) {
+        showMessage('请输入 SQL 语句', false);
+        return;
+    }
+
+    showMessage('正在执行...', true, true);
+    resultSection.classList.add('hidden');
+    resultSection.innerHTML = '';
+    exportTarget = null;
+
+    try {
+        const resp = await fetch('/api/sql/execute', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ database, sql })
+        });
+        const json = await resp.json();
+
+        if (!json.success) {
+            showMessage(json.message, false);
+            return;
+        }
+
+        const data = json.data;
+        showMessage(data.message, true);
+        renderResults(data);
+    } catch (e) {
+        showMessage('请求失败: ' + e.message, false);
+    }
+});
+
+document.getElementById('export-cancel').addEventListener('click', () => {
+    exportModal.classList.add('hidden');
+    exportTarget = null;
+});
+
+document.getElementById('export-confirm').addEventListener('click', () => {
+    if (!exportTarget) {
+        exportModal.classList.add('hidden');
+        return;
+    }
+    const tableName = exportTableInput.value.trim();
+    if (!tableName) {
+        exportTableInput.focus();
+        return;
+    }
+    const content = buildInsertSql(tableName, exportTarget.columns, exportTarget.rows);
+    downloadSqlFile(content, sanitizeFileName(tableName) + '_insert.sql');
+    exportModal.classList.add('hidden');
+    exportTarget = null;
+});
+
+function showMessage(text, success, loading) {
+    messageEl.classList.remove('hidden', 'alert-success', 'alert-error', 'alert-info');
+    messageEl.classList.add(loading ? 'alert-info' : (success ? 'alert-success' : 'alert-error'));
+    messageEl.textContent = text;
+}
+
+function renderResults(data) {
+    const items = (data.items || []).filter(item => item.hasResultSet);
+    if (items.length === 0) {
+        resultSection.classList.add('hidden');
+        return;
+    }
+
+    resultSection.innerHTML = '';
+    items.forEach((item, index) => {
+        const block = document.createElement('div');
+        block.className = 'result-block';
+
+        const header = document.createElement('div');
+        header.className = 'result-header';
+        const title = document.createElement('h2');
+        title.textContent = items.length === 1 ? '执行结果' : ('执行结果 ' + (index + 1));
+        header.appendChild(title);
+
+        const exportBtn = document.createElement('button');
+        exportBtn.type = 'button';
+        exportBtn.className = 'btn btn-secondary';
+        exportBtn.textContent = '导出 INSERT SQL';
+        exportBtn.addEventListener('click', () => {
+            if (!item.rows || item.rows.length === 0) {
+                showMessage('没有可导出的结果集', false);
+                return;
+            }
+            exportTarget = item;
+            exportTableInput.value = guessTableName(sqlInput.value);
+            exportModal.classList.remove('hidden');
+        });
+        header.appendChild(exportBtn);
+        block.appendChild(header);
+
+        const wrapper = document.createElement('div');
+        wrapper.className = 'table-wrapper';
+        const table = document.createElement('table');
+        const thead = document.createElement('thead');
+        const tbody = document.createElement('tbody');
+        const headRow = document.createElement('tr');
+        (item.columns || []).forEach(col => {
+            const th = document.createElement('th');
+            th.textContent = col;
+            headRow.appendChild(th);
+        });
+        thead.appendChild(headRow);
+        (item.rows || []).forEach(row => {
+            const tr = document.createElement('tr');
+            row.forEach(cell => {
+                const td = document.createElement('td');
+                td.textContent = cell === null ? 'NULL' : String(cell);
+                tr.appendChild(td);
+            });
+            tbody.appendChild(tr);
+        });
+        table.appendChild(thead);
+        table.appendChild(tbody);
+        wrapper.appendChild(table);
+        block.appendChild(wrapper);
+        resultSection.appendChild(block);
+    });
+    resultSection.classList.remove('hidden');
+}
+
+function guessTableName(sql) {
+    const match = sql.match(/\bfrom\s+(["']?)([\w.]+)\1(?:\s+(?:as\s+)?\w+)?/i);
+    return match ? match[2] : '';
+}
+
+function quoteIdentifier(name) {
+    return '"' + String(name).replace(/"/g, '""') + '"';
+}
+
+function formatTableName(tableName) {
+    return tableName.split('.').map(part => quoteIdentifier(part)).join('.');
+}
+
+function formatSqlValue(value) {
+    if (value === null || value === undefined) {
+        return 'NULL';
+    }
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? String(value) : 'NULL';
+    }
+    if (typeof value === 'boolean') {
+        return value ? 'TRUE' : 'FALSE';
+    }
+    return "'" + String(value).replace(/'/g, "''") + "'";
+}
+
+function buildInsertSql(tableName, columns, rows) {
+    const table = formatTableName(tableName);
+    const columnList = columns.map(col => quoteIdentifier(col)).join(', ');
+    const lines = rows.map(row => {
+        const values = row.map(formatSqlValue).join(', ');
+        return 'INSERT INTO ' + table + ' (' + columnList + ') VALUES (' + values + ');';
+    });
+    return lines.join('\n') + '\n';
+}
+
+function sanitizeFileName(name) {
+    return name.replace(/[^\w.-]+/g, '_');
+}
+
+function downloadSqlFile(content, filename) {
+    const blob = new Blob([content], { type: 'application/sql;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>

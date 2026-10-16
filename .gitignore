@@ -1,0 +1,8 @@
+target/
+!.mvn/wrapper/maven-wrapper.jar
+config/db-config.json
+.idea/
+*.iml
+.vscode/
+*.class
+*.log

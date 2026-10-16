@@ -1,0 +1,7 @@
+target/*
+!target/db-tools-1.0.0.jar
+config/db-config.json
+.git/
+.idea/
+*.iml
+.vscode/
