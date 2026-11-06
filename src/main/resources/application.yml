@@ -6,3 +6,7 @@ spring:
     name: db-tools
   thymeleaf:
     cache: false
+
+# 默认写入 java.io.tmpdir/db-tools/db-config.json（容器内一般为 /tmp/...，重启容器后丢失）
+# dbtools:
+#   config-file: /tmp/db-tools/db-config.json

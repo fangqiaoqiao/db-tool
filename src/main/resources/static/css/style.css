@@ -70,6 +70,75 @@ body {
     font-size: 0.95rem;
 }
 
+.btn-config {
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.45);
+    padding: 7px 14px;
+    white-space: nowrap;
+}
+
+.btn-config:hover {
+    background: rgba(255, 255, 255, 0.28);
+}
+
+.btn-sm {
+    padding: 6px 12px;
+    font-size: 0.85rem;
+}
+
+.modal-config {
+    max-width: 720px;
+    max-height: 85vh;
+    overflow: auto;
+}
+
+.modal-config-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.modal-config-header h3 {
+    margin: 0;
+}
+
+.db-config-list {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.db-config-card {
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+    padding: 16px;
+    background: #f9fafb;
+}
+
+.db-config-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.db-config-card-head h4 {
+    margin: 0;
+    font-size: 1.05rem;
+}
+
+.db-config-add-wrap {
+    margin-top: 16px;
+}
+
+#db-config-message {
+    margin: 0 0 16px;
+}
+
 .main {
     padding: 24px 20px 40px;
 }
@@ -327,8 +396,14 @@ tbody tr:hover {
         gap: 12px;
     }
 
-    .db-picker,
-    .db-picker select {
+    .db-picker {
         width: 100%;
+        flex-wrap: wrap;
+    }
+
+    .db-picker select {
+        flex: 1 1 160px;
+        min-width: 0;
+        width: auto;
     }
 }

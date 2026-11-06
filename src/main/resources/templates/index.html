@@ -13,8 +13,10 @@
         <div class="db-picker">
             <label for="database">数据库</label>
             <select id="database">
+                <option value="">请选择数据库</option>
                 <option th:each="db : ${databases}" th:value="${db.id}" th:text="${db.label}"></option>
             </select>
+            <button type="button" class="btn btn-config" id="db-config-btn">数据库配置</button>
         </div>
     </div>
 </header>
@@ -54,6 +56,23 @@
     </div>
 </div>
 
+<div id="db-config-modal" class="modal-overlay hidden">
+    <div class="modal modal-config">
+        <div class="modal-config-header">
+            <h3>数据库配置</h3>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" id="db-config-cancel">取消</button>
+                <button type="button" class="btn btn-primary" id="db-config-save">保存</button>
+            </div>
+        </div>
+        <div id="db-config-message" class="alert hidden"></div>
+        <div id="db-config-list" class="db-config-list"></div>
+        <div class="db-config-add-wrap">
+            <button type="button" class="btn btn-secondary" id="db-config-add">添加</button>
+        </div>
+    </div>
+</div>
+
 <script>
 const sqlInput = document.getElementById('sql');
 const databaseSelect = document.getElementById('database');
@@ -61,8 +80,17 @@ const messageEl = document.getElementById('message');
 const resultSection = document.getElementById('result-section');
 const exportModal = document.getElementById('export-modal');
 const exportTableInput = document.getElementById('export-table');
+const dbConfigModal = document.getElementById('db-config-modal');
+const dbConfigList = document.getElementById('db-config-list');
+const dbConfigMessageEl = document.getElementById('db-config-message');
 
 let exportTarget = null;
+let currentDatabaseId = databaseSelect.value || '';
+let suppressChangeEvent = false;
+let draftConfigs = [];
+let nextRegionSeq = 1;
+let switchRequestSeq = 0;
+let switchingDatabase = false;
 
 document.getElementById('clear-btn').addEventListener('click', () => {
     sqlInput.value = '';
@@ -70,6 +98,137 @@ document.getElementById('clear-btn').addEventListener('click', () => {
     resultSection.classList.add('hidden');
     resultSection.innerHTML = '';
     exportTarget = null;
+});
+
+databaseSelect.addEventListener('change', async () => {
+    if (suppressChangeEvent) {
+        return;
+    }
+    if (switchingDatabase) {
+        setSelectValue(currentDatabaseId);
+        return;
+    }
+    const nextId = databaseSelect.value;
+    if (!nextId) {
+        currentDatabaseId = '';
+        return;
+    }
+    const label = databaseSelect.options[databaseSelect.selectedIndex].text;
+    const confirmed = window.confirm('是否切换到数据库「' + label + '」？');
+    if (!confirmed) {
+        setSelectValue(currentDatabaseId);
+        return;
+    }
+
+    const requestId = ++switchRequestSeq;
+    switchingDatabase = true;
+    databaseSelect.disabled = true;
+    showMessage('正在测试连接...', true, true);
+    try {
+        const resp = await fetch('/api/database/test?id=' + encodeURIComponent(nextId), {
+            method: 'POST'
+        });
+        const json = await resp.json();
+        if (requestId !== switchRequestSeq) {
+            return;
+        }
+        if (json.success) {
+            currentDatabaseId = nextId;
+            setSelectValue(nextId);
+            showMessage(json.message || '切换成功', true);
+        } else {
+            setSelectValue(currentDatabaseId);
+            showMessage(json.message || '切换失败', false);
+        }
+    } catch (e) {
+        if (requestId !== switchRequestSeq) {
+            return;
+        }
+        setSelectValue(currentDatabaseId);
+        showMessage('测试连接失败: ' + e.message, false);
+    } finally {
+        if (requestId === switchRequestSeq) {
+            switchingDatabase = false;
+            databaseSelect.disabled = false;
+        }
+    }
+});
+
+document.getElementById('db-config-btn').addEventListener('click', async () => {
+    try {
+        const resp = await fetch('/api/database/configs');
+        const json = await resp.json();
+        if (!json.success) {
+            showMessage(json.message || '加载配置失败', false);
+            return;
+        }
+        draftConfigs = (json.data || []).map(item => ({
+            regionName: item.regionName,
+            name: item.name || '',
+            url: item.url || '',
+            username: item.username || '',
+            password: item.password || ''
+        }));
+        if (draftConfigs.length === 0) {
+            draftConfigs.push({
+                regionName: '数据库1',
+                name: '',
+                url: '',
+                username: '',
+                password: ''
+            });
+        }
+        nextRegionSeq = computeNextRegionSeq(draftConfigs);
+        renderConfigEditor();
+        hideConfigMessage();
+        dbConfigModal.classList.remove('hidden');
+    } catch (e) {
+        showMessage('加载配置失败: ' + e.message, false);
+    }
+});
+
+document.getElementById('db-config-cancel').addEventListener('click', () => {
+    dbConfigModal.classList.add('hidden');
+    draftConfigs = [];
+    hideConfigMessage();
+});
+
+document.getElementById('db-config-add').addEventListener('click', () => {
+    collectDraftFromDom();
+    const regionName = '数据库' + nextRegionSeq;
+    nextRegionSeq += 1;
+    draftConfigs.push({
+        regionName: regionName,
+        name: '',
+        url: '',
+        username: '',
+        password: ''
+    });
+    renderConfigEditor();
+});
+
+document.getElementById('db-config-save').addEventListener('click', async () => {
+    collectDraftFromDom();
+    showConfigMessage('正在保存...', true, true);
+    try {
+        const resp = await fetch('/api/database/configs', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(draftConfigs)
+        });
+        const json = await resp.json();
+        if (!json.success) {
+            showConfigMessage(json.message || '保存失败', false);
+            return;
+        }
+        refreshDatabaseOptions(json.data || [], currentDatabaseId);
+        dbConfigModal.classList.add('hidden');
+        draftConfigs = [];
+        hideConfigMessage();
+        showMessage(json.message || '保存成功', true);
+    } catch (e) {
+        showConfigMessage('保存失败: ' + e.message, false);
+    }
 });
 
 document.getElementById('execute-btn').addEventListener('click', async () => {
@@ -131,10 +290,134 @@ document.getElementById('export-confirm').addEventListener('click', () => {
     exportTarget = null;
 });
 
+function computeNextRegionSeq(list) {
+    let max = 0;
+    (list || []).forEach(item => {
+        const digits = String(item.regionName || '').replace(/\D+/g, '');
+        if (digits) {
+            const n = parseInt(digits, 10);
+            if (!Number.isNaN(n) && n > max) {
+                max = n;
+            }
+        }
+    });
+    return max + 1;
+}
+
+function collectDraftFromDom() {
+    const cards = dbConfigList.querySelectorAll('.db-config-card');
+    const next = [];
+    cards.forEach(card => {
+        const regionName = card.getAttribute('data-region');
+        next.push({
+            regionName: regionName,
+            name: card.querySelector('.cfg-name').value,
+            url: card.querySelector('.cfg-url').value,
+            username: card.querySelector('.cfg-username').value,
+            password: card.querySelector('.cfg-password').value
+        });
+    });
+    draftConfigs = next;
+}
+
+function renderConfigEditor() {
+    dbConfigList.innerHTML = '';
+    if (draftConfigs.length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'hint';
+        empty.textContent = '暂无数据库配置，点击下方“添加”创建。';
+        dbConfigList.appendChild(empty);
+        return;
+    }
+
+    draftConfigs.forEach((item, index) => {
+        const card = document.createElement('div');
+        card.className = 'db-config-card';
+        card.setAttribute('data-region', item.regionName);
+
+        const head = document.createElement('div');
+        head.className = 'db-config-card-head';
+        const title = document.createElement('h4');
+        title.textContent = item.regionName;
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'btn btn-danger btn-sm';
+        delBtn.textContent = '删除';
+        delBtn.addEventListener('click', () => {
+            collectDraftFromDom();
+            draftConfigs.splice(index, 1);
+            renderConfigEditor();
+        });
+        head.appendChild(title);
+        head.appendChild(delBtn);
+        card.appendChild(head);
+
+        card.appendChild(buildField('数据库名称', 'cfg-name', 'text', item.name || ''));
+        card.appendChild(buildField('数据库url', 'cfg-url', 'text', item.url || ''));
+        card.appendChild(buildField('数据库账号', 'cfg-username', 'text', item.username || ''));
+        card.appendChild(buildField('数据库密码', 'cfg-password', 'password', item.password || ''));
+        dbConfigList.appendChild(card);
+    });
+}
+
+function buildField(labelText, className, inputType, value) {
+    const group = document.createElement('div');
+    group.className = 'form-group';
+    const label = document.createElement('label');
+    label.textContent = labelText;
+    const input = document.createElement('input');
+    input.type = inputType;
+    input.className = className;
+    input.value = value;
+    input.autocomplete = inputType === 'password' ? 'new-password' : 'off';
+    group.appendChild(label);
+    group.appendChild(input);
+    return group;
+}
+
+function refreshDatabaseOptions(list, preferredId) {
+    const previous = preferredId || '';
+    suppressChangeEvent = true;
+    databaseSelect.innerHTML = '';
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = '请选择数据库';
+    databaseSelect.appendChild(placeholder);
+
+    (list || []).forEach(db => {
+        const opt = document.createElement('option');
+        opt.value = db.id;
+        opt.textContent = db.label;
+        databaseSelect.appendChild(opt);
+    });
+
+    const exists = Array.from(databaseSelect.options).some(opt => opt.value === previous && previous !== '');
+    currentDatabaseId = exists ? previous : '';
+    databaseSelect.value = currentDatabaseId;
+    suppressChangeEvent = false;
+}
+
+function setSelectValue(value) {
+    suppressChangeEvent = true;
+    databaseSelect.value = value || '';
+    suppressChangeEvent = false;
+}
+
 function showMessage(text, success, loading) {
     messageEl.classList.remove('hidden', 'alert-success', 'alert-error', 'alert-info');
     messageEl.classList.add(loading ? 'alert-info' : (success ? 'alert-success' : 'alert-error'));
     messageEl.textContent = text;
+}
+
+function showConfigMessage(text, success, loading) {
+    dbConfigMessageEl.classList.remove('hidden', 'alert-success', 'alert-error', 'alert-info');
+    dbConfigMessageEl.classList.add(loading ? 'alert-info' : (success ? 'alert-success' : 'alert-error'));
+    dbConfigMessageEl.textContent = text;
+}
+
+function hideConfigMessage() {
+    dbConfigMessageEl.classList.add('hidden');
+    dbConfigMessageEl.textContent = '';
 }
 
 function renderResults(data) {
